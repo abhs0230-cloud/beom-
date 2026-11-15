@@ -1,0 +1,52 @@
+{
+  "packageName": "com.sumcare.app",
+  "appDescription": "An in-car air quality assistant that checks outdoor fine dust at the vehicle's location and protects cabin air by controlling windows, air recirculation and the air purifier.",
+  "invokeWord": "숨케어",
+  "version": "1.0.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "SET_AIR_RECIRCULATION",
+        "description": "Turn the cabin air recirculation mode on or off, and also turn on the air purifier when outdoor fine dust is bad.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "True to turn air recirculation on, false to turn it off and bring in outside air."
+            }
+          },
+          "required": ["enabled"]
+        },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "PROTECT_CABIN_AIR",
+        "description": "Close all side windows and turn on air recirculation and the air purifier to keep outdoor fine dust out of the cabin.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "GET_OUTDOOR_AIR_QUALITY",
+        "description": "Get the current outdoor fine dust grade and PM2.5 and PM10 concentrations at the vehicle's current location.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "component": "activity"
+      }
+    }
+  ]
+}

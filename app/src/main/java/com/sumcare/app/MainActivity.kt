@@ -3,8 +3,6 @@ package com.sumcare.app
 import ai.pleos.playground.navi.data.CurrentLocationInfo
 import ai.pleos.playground.navi.helper.NaviHelper
 import ai.pleos.playground.navi.helper.listener.NaviHelperEventListener
-import ai.pleos.playground.stt.SpeechToText
-import ai.pleos.playground.stt.listener.ResultListener
 import ai.pleos.playground.tts.TextToSpeech
 import ai.pleos.playground.tts.constant.ErrorType
 import ai.pleos.playground.tts.constant.Mode
@@ -38,6 +36,8 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 import kotlin.concurrent.thread
 
@@ -47,7 +47,8 @@ import kotlin.concurrent.thread
  * 1) 출발(기어 D) 시 바깥 미세먼지를 음성으로 브리핑
  * 2) 미세먼지가 나쁜데 창문이 열리기 시작하면 즉시 음성 경고 + 원터치 보호(창문 닫기·내기순환·공기청정)
  * 3) 공기가 좋으면 환기를 권장
- * 4) 음성 명령: "내기모드 켜줘", "공기청정 켜줘", "창문 닫아줘", "외기로 바꿔줘"
+ * 4) 음성 명령: Gleo Interface 연동 (assets/schema.json)
+ *    "숨케어, 내기 순환모드로 해줘" → Gleo가 SET_AIR_RECIRCULATION 호출 → 앱이 실행하고 결과를 Gleo에 회신
  * 5) 차 안팎 공기 흐름 애니메이션 (CabinView)
  */
 class MainActivity : Activity() {
@@ -59,9 +60,7 @@ class MainActivity : Activity() {
     private lateinit var vehicle: Vehicle
     private lateinit var navi: NaviHelper
     private lateinit var tts: TextToSpeech
-    private lateinit var stt: SpeechToText
     private var ttsReady = false
-    private var sttReady = false
 
     // ── 상태 ──
     private val sideWindows = listOf(
@@ -105,13 +104,22 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         buildUi()
         initTts()
-        initStt()
         initVehicle()
         initNavi()
         registerReceiver(demoReceiver, IntentFilter("com.sumcare.app.DEMO"), RECEIVER_EXPORTED)
         refreshAir()
         say("안녕하세요, 숨케어예요. 바깥 공기를 살피고 있을게요.", speak = false)
         main.postDelayed(poll, 1500)
+        // Gleo가 앱을 새로 띄우며 Action을 보낸 경우: Vehicle 연결을 잠시 기다린 뒤 처리
+        val launch = intent
+        main.postDelayed({ handleGleo(launch) }, 1500)
+    }
+
+    /** 앱이 이미 떠 있을 때 Gleo Action이 오면 여기로 들어온다 (singleTask) */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleGleo(intent)
     }
 
     // ───────────────────────── 시나리오 ─────────────────────────
@@ -176,44 +184,115 @@ class MainActivity : Activity() {
     private fun setCleaner(on: Boolean) =
         vehicle.getHVAC().setHvacAirCleaner(hvacArea, on, { _, v -> airCleaner = v; main.post { render() } }, { e -> Log.w(tag, "air cleaner failed", e) })
 
-    // ───────────────────────── 음성 명령 ─────────────────────────
+    // ───────────────────────── Gleo Interface ─────────────────────────
 
-    /** 인식된 문장을 차량 동작으로 바꾼다 */
-    private fun handleVoice(text: String, demoInput: Boolean = false) {
-        heardText.text = "🗣  “$text”" + if (demoInput) "   · 시연 입력" else ""
+    private val gleoActions = setOf("SET_AIR_RECIRCULATION", "PROTECT_CABIN_AIR", "GET_OUTDOOR_AIR_QUALITY")
+
+    /**
+     * Gleo Action 처리. Gleo AI가 사용자의 말을 해석해 schema.json 의 function을 고르고,
+     * action = function 이름, ACTION_PARAM = 파라미터 JSON 으로 startActivity 한다.
+     */
+    private fun handleGleo(i: Intent?) {
+        val action = i?.action ?: return
+        if (action !in gleoActions) return
+        i.action = null  // 화면 회전·재생성 때 같은 명령이 다시 실행되지 않도록
+        val params = parseActionParam(i)
+        val utterance = i.getStringExtra("DEMO_UTTERANCE")   // 시연용: 운전자 발화를 화면에 표시
+        heardText.text = if (utterance != null) "🎙  Gleo · “$utterance”   · 시연 입력" else "🎙  Gleo 음성 명령"
         heardText.visibility = View.VISIBLE
-        Log.d(tag, "HEARD: $text")
-        val t = text.replace(" ", "")
-        when {
-            ("내기" in t || "실내순환" in t) && ("꺼" in t) -> { setRecirc(false); say("내기모드를 껐어요. 바깥 공기가 들어와요.") }
-            "외기" in t -> { setRecirc(false); say("외기모드로 바꿨어요. 바깥 공기가 들어와요.") }
-            "내기" in t || "실내순환" in t -> {
-                setRecirc(true)
-                if (reading.grade.isBad) {
-                    setCleaner(true)
-                    say("내기순환 모드로 바꿨어요. 바깥 미세먼지가 '${reading.grade.label}'이라 공기청정도 함께 켤게요.")
-                } else say("내기순환 모드로 바꿨어요.")
+        if (utterance != null) Log.d(tag, "HEARD: $utterance")
+        Log.d(tag, "GLEO ACTION: $action $params")
+        val r = reading
+        val airData = JSONArray().put(
+            JSONObject().put("grade", r.grade.label).put("pm25", r.pm25).put("pm10", r.pm10)
+        ).toString()
+
+        when (action) {
+            "SET_AIR_RECIRCULATION" -> {
+                if (!params.has("enabled")) {
+                    say("내기순환을 켤까요, 끌까요?")
+                    respondGleo(action, "asking", "It is necessary to know whether to turn air recirculation on or off.")
+                    return
+                }
+                val on = params.optBoolean("enabled")
+                setRecirc(on)
+                val withCleaner = on && r.grade.isBad
+                if (withCleaner) setCleaner(true)
+                say(
+                    when {
+                        !on -> "외기 모드로 바꿨어요. 바깥 공기가 들어와요."
+                        withCleaner -> "내기순환 모드로 바꿨어요. 바깥 미세먼지가 '${r.grade.label}'이라 공기청정도 함께 켤게요."
+                        else -> "내기순환 모드로 바꿨어요."
+                    }
+                )
+                respondGleo(
+                    action, "success",
+                    when {
+                        !on -> "Air recirculation was turned off."
+                        withCleaner -> "Air recirculation and the air purifier were turned on because outdoor fine dust is bad."
+                        else -> "Air recirculation was turned on."
+                    },
+                    airData,
+                )
             }
-            "공기청정" in t -> { setCleaner(true); say("공기청정을 켰어요.") }
-            "창문" in t && "닫" in t -> { closeAllWindows(); say("창문을 모두 닫을게요.") }
-            "미세먼지" in t || "공기" in t -> say("지금 바깥 미세먼지는 '${reading.grade.label}', 초미세먼지 ${reading.pm25}마이크로그램이에요.")
-            else -> say("죄송해요, 다시 한 번 말씀해 주세요. 예를 들어 '내기모드 켜줘'라고 말해 보세요.")
+            "PROTECT_CABIN_AIR" -> {
+                protect(closeWindows = true)
+                respondGleo(action, "success", "All side windows were closed and air recirculation and the air purifier were turned on.", airData)
+            }
+            "GET_OUTDOOR_AIR_QUALITY" -> {
+                say("지금 바깥 미세먼지는 '${r.grade.label}', 초미세먼지 ${r.pm25}마이크로그램이에요.")
+                respondGleo(action, "success", "The outdoor fine dust grade is ${r.grade.name} with PM2.5 ${r.pm25} and PM10 ${r.pm10}.", airData)
+            }
         }
     }
 
-    private fun startListening() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
-            return
+    /** ACTION_PARAM(JSON 문자열, 따옴표로 한 번 더 감싸져 올 수 있음) 또는 개별 extra를 읽는다 */
+    private fun parseActionParam(i: Intent): JSONObject {
+        var s = i.getStringExtra("ACTION_PARAM")?.trim().orEmpty()
+        if (s.length >= 2 && s.startsWith("\"") && s.endsWith("\"")) s = s.substring(1, s.length - 1).replace("\\\"", "\"")
+        val json = runCatching { JSONObject(s) }.getOrElse { JSONObject() }
+        if (!json.has("enabled") && i.hasExtra("enabled")) {
+            when (val v = i.extras?.get("enabled")) {
+                is Boolean -> json.put("enabled", v)
+                is String -> json.put("enabled", v.equals("true", ignoreCase = true))
+            }
         }
-        if (!sttReady) { say("음성 인식을 준비하고 있어요. 잠시 후 다시 눌러 주세요."); return }
-        if (ttsReady) tts.stop()
-        showListening()
-        stt.request()
+        return json
+    }
+
+    /**
+     * 처리 결과를 Gleo에 회신 (Gleo는 7초 뒤 Action을 취소하므로 바로 보낸다).
+     * 숨케어가 직접 안내 음성을 낼 수 있으면 mode=silent 로 Gleo의 음성 중복을 막고,
+     * TTS가 아직 준비 전이면 mode=voice 로 Gleo가 대신 말하게 한다.
+     */
+    private fun respondGleo(functionName: String, status: String, message: String, data: String? = null) {
+        runCatching {
+            val res = JSONObject()
+                .put("functionName", functionName)
+                .put("status", status)
+                .put("message", message)
+                .put("mode", if (ttsReady) "silent" else "voice")
+            data?.let { res.put("data", it) }
+            sendBroadcast(Intent("ai.pleos.playground.intent.action.APP_ACTION_RESPONSE").apply {
+                putExtra("packageName", packageName)
+                putExtra("response", res.toString())
+            })
+            Log.d(tag, "GLEO RESPONSE: $res")
+        }.onFailure { Log.w(tag, "gleo response failed", it) }
+    }
+
+    /** 마이크 버튼: 차량 음성 비서 Gleo를 부른다 (앱은 마이크를 직접 쓰지 않는다) */
+    private fun openGleo() {
+        runCatching {
+            startActivity(Intent(Intent.ACTION_ASSIST).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure {
+            Log.w(tag, "gleo open failed", it)
+            say("핸들의 음성 버튼을 누르고 '숨케어, 내기 순환모드로 해줘'라고 말해 보세요.")
+        }
     }
 
     private fun showListening() {
-        heardText.text = "🎤  듣고 있어요…"
+        heardText.text = "🎙  Gleo가 듣고 있어요…"
         heardText.visibility = View.VISIBLE
         hideActions()
     }
@@ -296,34 +375,6 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun initStt() {
-        stt = SpeechToText(this, ai.pleos.playground.stt.constant.Mode.ON_DEVICE)
-        stt.initialize(object : ai.pleos.playground.stt.listener.OnInitializeListener {
-            override fun onSuccess() {
-                stt.setLocale(Locale.KOREA)
-                sttReady = true
-            }
-            override fun onFailure(errorType: ai.pleos.playground.stt.constant.ErrorType) { Log.w(tag, "stt init failed: $errorType") }
-        })
-        stt.addListener(object : ResultListener {
-            override fun onReady() = Unit
-            override fun onStartedRecognition() = Unit
-            override fun onEndedRecognition() = Unit
-            override fun onUpdatedRms(rms: Double) = Unit
-            override fun onUpdatedEpdData(on: Long, off: Long) = Unit
-            override fun onUpdated(text: String, isFinal: Boolean) {
-                val s = text.trim()
-                main.post {
-                    if (isFinal && s.isNotEmpty()) handleVoice(s)
-                    else if (s.isNotEmpty()) heardText.text = "🎤  $s…"
-                }
-            }
-            override fun onError(errorType: ai.pleos.playground.stt.constant.ErrorType) {
-                Log.w(tag, "stt error: $errorType")
-                main.post { heardText.text = "🎤  음성을 듣지 못했어요" }
-            }
-        })
-    }
 
     private fun refreshAir() {
         thread {
@@ -382,7 +433,7 @@ class MainActivity : Activity() {
                     "s1" -> "장면 1 · 미세먼지 '좋음'인 날"
                     "s2" -> "장면 2 · 미세먼지 '나쁨'인 날 출발"
                     "s3" -> "장면 3 · 창문을 열려고 할 때"
-                    "s4" -> "장면 4 · 말로 내기순환 모드 켜기"
+                    "s4" -> "장면 4 · Gleo에게 말로 내기순환 켜기"
                     "end" -> "창문 닫힘 · 내기순환 · 공기청정 ON"
                     "none" -> ""
                     else -> key
@@ -391,15 +442,19 @@ class MainActivity : Activity() {
                 captionText.visibility = if (it.isBlank()) View.GONE else View.VISIBLE
             }
             if (i.getBooleanExtra("intro", false)) say("안녕하세요, 숨케어예요. 바깥 공기를 살피고, 필요할 때 알려 드릴게요.")
+            // Gleo가 보내는 것과 같은 Action intent를 만들어 시연한다
             i.getStringExtra("voice")?.let { key ->
-                val phrase = when (key) {
-                    "recirc_on" -> "내기 순환모드로 해줘"
-                    "cleaner_on" -> "공기청정 켜줘"
-                    "close_windows" -> "창문 닫아줘"
-                    else -> key
+                val (action, param, phrase) = when (key) {
+                    "recirc_on" -> Triple("SET_AIR_RECIRCULATION", "{\"enabled\":true}", "숨케어, 내기 순환모드로 해줘")
+                    "protect" -> Triple("PROTECT_CABIN_AIR", "{}", "숨케어, 차 안 공기 지켜줘")
+                    "air" -> Triple("GET_OUTDOOR_AIR_QUALITY", "{}", "숨케어, 바깥 미세먼지 어때?")
+                    else -> return@let
                 }
                 showListening()
-                main.postDelayed({ handleVoice(phrase, demoInput = true) }, 1800)
+                main.postDelayed({
+                    handleGleo(Intent(action).setPackage(packageName)
+                        .putExtra("ACTION_PARAM", param).putExtra("DEMO_UTTERANCE", phrase))
+                }, 1800)
             }
             when (i.getStringExtra("tap")) {
                 "primary" -> onPrimary()
@@ -501,7 +556,7 @@ class MainActivity : Activity() {
             }
             addView(actions)
             addView(View(context), LinearLayout.LayoutParams(1, 0, 1f))
-            micBtn = button(CARD2, ACCENT) { startListening() }.apply { text = "🎤  말로 하기  ·  “내기모드 켜줘”" }
+            micBtn = button(CARD2, ACCENT) { openGleo() }.apply { text = "🎙  Gleo에게 말하기  ·  “숨케어, 내기 순환모드로 해줘”" }
             addView(micBtn, LinearLayout.LayoutParams(-1, dp(96)))
         }
         row.addView(airCard, LinearLayout.LayoutParams(0, -1, 0.8f).apply { marginEnd = dp(20) })
@@ -539,7 +594,6 @@ class MainActivity : Activity() {
         main.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(demoReceiver) }
         runCatching { tts.release() }
-        runCatching { stt.release() }
         runCatching { navi.release() }
         runCatching { vehicle.release() }
         super.onDestroy()

@@ -18,9 +18,7 @@
     <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
     <!-- TextToSpeech SDK -->
     <uses-permission android:name="pleos.car.permission.TTS_SERVICE" />
-    <!-- SpeechToText SDK (음성 명령) -->
-    <uses-permission android:name="pleos.car.permission.STT_SERVICE" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 음성 명령은 Gleo Interface로 받는다 (assets/schema.json). 앱은 마이크를 직접 쓰지 않는다 -->
 
     <application
         android:label="숨케어"
@@ -36,6 +34,19 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Gleo Action (assets/schema.json 의 actionCalls) -->
+            <intent-filter>
+                <action android:name="SET_AIR_RECIRCULATION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="PROTECT_CABIN_AIR" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="GET_OUTDOOR_AIR_QUALITY" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
     </application>

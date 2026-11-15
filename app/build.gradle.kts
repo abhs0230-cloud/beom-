@@ -42,5 +42,4 @@ dependencies {
     implementation("ai.pleos.playground:Vehicle:2.3.2")        // 창문·공조·기어·착석
     implementation("ai.pleos.playground:NaviHelper:3.0.5")     // 현재 위치
     implementation("ai.pleos.playground:TextToSpeech:3.3.1")   // 음성 안내 (ON_DEVICE)
-    implementation("ai.pleos.playground:SpeechToText:3.3.1")   // 음성 명령
 }
