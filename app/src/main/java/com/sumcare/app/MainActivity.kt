@@ -15,6 +15,8 @@ import ai.pleos.playground.vehicle.constant.area.SeatValue
 import ai.pleos.playground.vehicle.constant.area.WindowValue
 import ai.pleos.playground.vehicle.constant.control.VehicleGear
 import ai.pleos.playground.vehicle.listener.GearSelectionListener
+import ai.pleos.playground.vehicle.listener.HvacAirCleanerStateListener
+import ai.pleos.playground.vehicle.listener.HvacRecirculationStateListener
 import ai.pleos.playground.vehicle.listener.WindowPositionListener
 import android.Manifest
 import android.app.Activity
@@ -109,7 +111,6 @@ class MainActivity : Activity() {
         registerReceiver(demoReceiver, IntentFilter("com.sumcare.app.DEMO"), RECEIVER_EXPORTED)
         refreshAir()
         say("안녕하세요, 숨케어예요. 바깥 공기를 살피고 있을게요.", speak = false)
-        main.postDelayed(poll, 1500)
         // Gleo가 앱을 새로 띄우며 Action을 보낸 경우: Vehicle 연결을 잠시 기다린 뒤 처리
         val launch = intent
         main.postDelayed({ handleGleo(launch) }, 1500)
@@ -329,16 +330,29 @@ class MainActivity : Activity() {
                 override fun onFailed(e: Exception) { Log.w(tag, "window listener failed", e) }
             })
         }
+
+        // 공조(내기순환·공기청정): 처음 값은 한 번 읽고, 이후에는 바뀔 때만 알림을 받는다 (주기적 폴링 없음)
+        val h = vehicle.getHVAC()
+        h.getHvacRecirculationState(hvacArea, { on -> recirc = on; main.post { render() } }, { e -> Log.w(tag, "recirc read failed", e) })
+        h.getHvacAirCleanerState(hvacArea, { on -> airCleaner = on; main.post { render() } }, { e -> Log.w(tag, "air cleaner read failed", e) })
+        h.registerHvacRecirculationState(hvacArea, recircListener)
+        h.registerHvacAirCleanerState(hvacArea, cleanerListener)
     }
 
-    /** 공조 상태는 짧은 주기로 다시 읽는다 (Virtual Console에서 바꾼 값도 반영) */
-    private val poll = object : Runnable {
-        override fun run() {
-            val h = vehicle.getHVAC()
-            h.getHvacRecirculationState(hvacArea, { on -> recirc = on; main.post { render() } }, { })
-            h.getHvacAirCleanerState(hvacArea, { on -> airCleaner = on; main.post { render() } }, { })
-            main.postDelayed(this, 1500)
+    private val recircListener = object : HvacRecirculationStateListener {
+        override fun onHvacAutoRecirculationStateUpdated(value: Boolean?) {
+            Log.d(tag, "HVAC recirc -> $value")
+            recirc = value; main.post { render() }
         }
+        override fun onFailed(e: Exception) { Log.w(tag, "recirc listener failed", e) }
+    }
+
+    private val cleanerListener = object : HvacAirCleanerStateListener {
+        override fun onHvacAirCleanerStateUpdated(value: Boolean?) {
+            Log.d(tag, "HVAC air cleaner -> $value")
+            airCleaner = value; main.post { render() }
+        }
+        override fun onFailed(e: Exception) { Log.w(tag, "air cleaner listener failed", e) }
     }
 
     private fun initNavi() {
@@ -595,6 +609,10 @@ class MainActivity : Activity() {
         runCatching { unregisterReceiver(demoReceiver) }
         runCatching { tts.release() }
         runCatching { navi.release() }
+        runCatching {
+            vehicle.getHVAC().unregisterHvacRecirculationState(hvacArea, recircListener)
+            vehicle.getHVAC().unregisterHvacAirCleanerState(hvacArea, cleanerListener)
+        }
         runCatching { vehicle.release() }
         super.onDestroy()
     }
