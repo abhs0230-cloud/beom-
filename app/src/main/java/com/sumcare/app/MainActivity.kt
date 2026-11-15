@@ -191,8 +191,8 @@ class MainActivity : Activity() {
                 setRecirc(true)
                 if (reading.grade.isBad) {
                     setCleaner(true)
-                    say("내기모드로 바꿨어요. 바깥 미세먼지가 '${reading.grade.label}'이라 공기청정도 함께 켤게요.")
-                } else say("내기모드로 바꿨어요.")
+                    say("내기순환 모드로 바꿨어요. 바깥 미세먼지가 '${reading.grade.label}'이라 공기청정도 함께 켤게요.")
+                } else say("내기순환 모드로 바꿨어요.")
             }
             "공기청정" in t -> { setCleaner(true); say("공기청정을 켰어요.") }
             "창문" in t && "닫" in t -> { closeAllWindows(); say("창문을 모두 닫을게요.") }
@@ -382,7 +382,7 @@ class MainActivity : Activity() {
                     "s1" -> "장면 1 · 미세먼지 '좋음'인 날"
                     "s2" -> "장면 2 · 미세먼지 '나쁨'인 날 출발"
                     "s3" -> "장면 3 · 창문을 열려고 할 때"
-                    "s4" -> "장면 4 · 말로 내기모드 켜기"
+                    "s4" -> "장면 4 · 말로 내기순환 모드 켜기"
                     "end" -> "창문 닫힘 · 내기순환 · 공기청정 ON"
                     "none" -> ""
                     else -> key
@@ -393,7 +393,7 @@ class MainActivity : Activity() {
             if (i.getBooleanExtra("intro", false)) say("안녕하세요, 숨케어예요. 바깥 공기를 살피고, 필요할 때 알려 드릴게요.")
             i.getStringExtra("voice")?.let { key ->
                 val phrase = when (key) {
-                    "recirc_on" -> "내기모드 켜줘"
+                    "recirc_on" -> "내기 순환모드로 해줘"
                     "cleaner_on" -> "공기청정 켜줘"
                     "close_windows" -> "창문 닫아줘"
                     else -> key
