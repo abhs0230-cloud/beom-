@@ -1,0 +1,16 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+# 시연 영상 작업 파일 (원본 녹화 124MB는 GitHub 100MB 제한 초과)
+/demo/raw-demo.webm
+/demo/frames/
+/demo/frames2/
+/demo/audio/
